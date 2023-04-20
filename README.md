@@ -21,6 +21,7 @@ from aenet import AdaptiveElasticNet
 X, y = ...
 
 model = AdaptiveElasticNet().fit(X, y)
+model.predict_proba(X)
 model.predict(X)
 model.score(X, y)
 ```
