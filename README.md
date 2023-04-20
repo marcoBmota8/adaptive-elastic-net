@@ -1,4 +1,4 @@
-# Adaptive Elastic-Net
+# Adaptive Elastic-Net (Binary Classifier)
 
 [![python versions](https://img.shields.io/pypi/pyversions/aenet.svg)](https://pypi.org/project/aenet/)
 [![version](https://img.shields.io/pypi/v/aenet.svg)](https://pypi.org/project/aenet/)
@@ -17,21 +17,17 @@ pip install aenet
 
 ```py
 from aenet import AdaptiveElasticNet
-from aenet import AdaptiveElasticNetCV
 
 X, y = ...
 
 model = AdaptiveElasticNet().fit(X, y)
 model.predict(X)
 model.score(X, y)
-
-model = AdaptiveElasticNetCV().fit(X, y)
-model.alpha_
-model.predict(X)
-model.score(X, y)
 ```
 
 ## Reference
+
+* Forked and modified from the regressor version: https://github.com/simaki/adaptive-elastic-net
 
 *  Zou, H. and Zhang, H. H. (2009). [On the adaptive elastic net with a diverging number of parameters](https://dx.doi.org/10.1214%2F08-AOS625). Annals
 of Statistics 37, 1733-1751.
