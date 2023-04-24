@@ -237,13 +237,14 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
         check_X_y(X, y)
 
         n_samples, n_features = X.shape
-        beta_variables = [cvxpy.Variable(n_features)]
-        # _, beta_variables = self._num_beta_var_from_group_index(group_index)
-        # beta_variables = cvxpy.Variable()
 
         if self.fit_intercept:
-            beta_variables = cvxpy.vstack(beta_variables,cvxpy.Variable(1)) # adds the intercept contribution to the prediction
+            beta_variables = [cvxpy.Variable(n_features + 1)] # adds the intercept contribution to the prediction
             X = np.concatenate((X,np.ones((X.shape[0],1))), axis = 1) # adds a columns of ones to the end of the data matrix
+        else:
+            beta_variables = [cvxpy.Variable(n_features)]
+            #_, beta_variables = self._num_beta_var_from_group_index(group_index)
+            #beta_variables = cvxpy.Variable()
 
         # --- define objective function ---
         #   l1 weights w_i are identified with coefs in usual elastic net
@@ -251,7 +252,8 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
 
         # /2 * n_samples to make it consistent with sklearn (asgl uses /n_samples)
         model_prediction = X @ beta_variables
-        cross_entropy_loss = -cvxpy.sum(y * cvxpy.log(self.signoid(model_prediction)) + (1 - y) * cvxpy.log(1 - self.signoid(model_prediction))) / (2*n_samples)
+        cross_entropy_loss = -cvxpy.sum(
+            y * cvxpy.log(self.signoid(model_prediction)) + (1 - y) * cvxpy.log(1 - self.signoid(model_prediction))) / (2*n_samples)
 
         enet_coef = self.elastic_net().fit(X, y).coef_
 
