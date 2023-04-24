@@ -109,7 +109,7 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
         precompute=False,
         max_iter=4000,
         copy_X=True,
-        solver_Adaptive=None,
+        solver_Adaptive="OSQP",
         solver_ENet = 'saga',
         tol=None,
         positive=False,
@@ -242,7 +242,7 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
         # beta_variables = cvxpy.Variable()
 
         if self.fit_intercept:
-            beta_variables = cvxpy.vstack(beta_variables[cvxpy.Variable(1)] ) # adds the intercept contribution to the prediction
+            beta_variables = cvxpy.vstack(beta_variables,cvxpy.Variable(1)) # adds the intercept contribution to the prediction
             X = np.concatenate((X,np.ones((X.shape[0],1))), axis = 1) # adds a columns of ones to the end of the data matrix
 
         # --- define objective function ---
@@ -272,7 +272,7 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
             cvxpy.Minimize(self.C * cross_entropy_loss+ l1_penalty + l2_penalty), constraints=constraints
         )
         # OSQP seems to be default for our problem.
-        problem.solve(solver="OSQP", max_iter=self.max_iter)
+        problem.solve(solver=self.solver_Adaptive, max_iter=self.max_iter)
 
         if problem.status != "optimal":
             raise ConvergenceWarning(
