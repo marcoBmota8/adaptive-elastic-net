@@ -11,15 +11,14 @@ import cvxpy
 import numpy as np
 from asgl import ASGL
 from sklearn.base import MultiOutputMixin
-from sklearn.base import RegressorMixin
+from sklearn.base import ClassifierMixin
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
-from sklearn.linear_model._coordinate_descent import _alpha_grid
 from sklearn.utils import check_X_y
 from sklearn.utils.validation import check_is_fitted
 
 
-class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMixin):
+class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierMixin):
     """
     Objective function is
 
@@ -50,6 +49,8 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
             nu = lim(n_samples -> inf) [log(n_features) / log(n_samples)]
         default is 1 because this value is natural in the sense that
         l1_penalty / l2_penalty is not (directly) dependent on scale of features
+    -rescale_EN: bool, default=False, Whether or not to apply Zou and Hastie 2005 rescaling of the ENet coefficients (Naive EN vs. EN)
+        #(this distinction was dropped in Friedman et al. 2010 however.)
     - fit_intercept = True
     - max_iter : int, default 10000
         The maximum number of iterations.
@@ -58,7 +59,7 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
     - positive_tol : float, optional
         Numerical optimization (cvxpy) may return slightly negative coefs.
         (See cvxpy issue/#1201)
-        If coef > -positive_tol, ignore this and forcively set negative coef to zero.
+        For negative coefficients, if coef > -positive_tol, ignore this and forcively set negative coef to zero.
         Otherwise, raise ValueError.
         If `positive_tol=None` always ignore (default)
     - eps_coef : float, default 1e-6
@@ -70,32 +71,6 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
     - intercept_
     - enet_coef_
     - weights_
-
-    Examples
-    --------
-    >>> from sklearn.datasets import make_regression
-
-    >>> X, y = make_regression(n_features=2, random_state=0)
-    >>> model = AdaptiveElasticNet(random_state=42)
-    >>> model.fit(X, y)
-    AdaptiveElasticNet(random_state=42, solver='default', tol=1e-05)
-    >>> print(model.coef_)
-    [14.24414426 48.9550584 ]
-    >>> print(model.enet_coef_)
-    [18.8... 64.5...]
-    >>> print(model.weights_)
-    [0.0530... 0.0154...]
-    >>> print(model.intercept_)
-    2.092...
-    >>> print(model.predict([[0, 0]]))
-    [2.092...]
-
-    Constraint:
-    >>> X, y = make_regression(n_features=10, random_state=0)
-    >>> model = AdaptiveElasticNet(positive=True).fit(X, -y)
-    >>> model.coef_
-    array([ 0.        ,  0.        ,  0.        ,  0.        ,  0.        ,
-            0.        ,  0.        ,  0.        , 13.39621927,  0.        ])
     """
 
     def __init__(
@@ -109,15 +84,16 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
         precompute=False,
         max_iter=4000,
         copy_X=True,
-        solver_Adaptive="OSQP",
+        solver_Adaptive="ECOS",
         solver_ENet = 'saga',
-        tol=None,
+        tol=1e-4,
         positive=False,
-        positive_tol=1e-3,
+        positive_tol=1e-4,
         random_state=None,
         eps_coef=1e-6,
+        warm_start = False
     ):
-        params_asgl = dict(model="lm", penalization="asgl")
+        params_asgl = dict(model="logistic", penalization="asgl")
         if solver_Adaptive is not None:
             params_asgl["solver"] = solver_Adaptive
         if tol is not None:
@@ -138,6 +114,7 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
         self.eps_coef = eps_coef
         self.solver_ENet = solver_ENet
         self.solver_Adaptive = solver_Adaptive
+        self.warm_start = warm_start
         self.rescale_EN = rescale_EN # Whether or not to apply Zou and Hastie 2005 rescaling of the ENet coefficients (Naive EN vs. EN)
         #(this distinction was dropped in Friedman et al. 2010 however.)
 
@@ -157,7 +134,6 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
             raise ValueError(
                 "l1_ratio must be between 0 and 1; " f"got l1_ratio={self.l1_ratio}"
             )
-
         if check_input:
             X_copied = self.copy_X and self.fit_intercept
             X, y = self._validate_data(
@@ -170,7 +146,6 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
                 multi_output=True,
                 y_numeric=True,
             )
-
         self.coef_, self.intercept_, self.enet_coef_, self.weights_ = self._ae(X, y)
 
         self.dual_gap_ = np.array([np.nan])
@@ -185,9 +160,6 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
     def predict_proba(self, X):
         check_is_fitted(self, ["coef_", "intercept_"])
         return super(LogisticRegression,self).predict_proba(X)
-    
-    def sigmoid(x):
-        return 1/(1+cvxpy.exp(-x))
     
     def score(self):
         '''
@@ -208,7 +180,7 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
         -------
         elastic_net : ElasticNet
         """
-        elastic_net = LogisticRegression(penalty='elasticnet')
+        elastic_net = LogisticRegression(penalty='elasticnet', solver = self.solver_ENet, warm_start=self.warm_start,)
 
 
         for k, v in self.get_params().items():
@@ -237,44 +209,44 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, RegressorMi
         check_X_y(X, y)
 
         n_samples, n_features = X.shape
+        beta_variables = [cvxpy.Variable(n_features)]
+        model_prediction = 0.0
 
-        if self.fit_intercept:
-            beta_variables = [cvxpy.Variable(n_features + 1)] # adds the intercept contribution to the prediction
-            X = np.concatenate((X,np.ones((X.shape[0],1))), axis = 1) # adds a columns of ones to the end of the data matrix
-        else:
-            beta_variables = [cvxpy.Variable(n_features)]
-            #_, beta_variables = self._num_beta_var_from_group_index(group_index)
-            #beta_variables = cvxpy.Variable()
+        if self.fit_intercept == True:
+            beta_variables = [cvxpy.Variable(1)]+beta_variables
+            ones = cvxpy.Constant(np.ones((n_samples,1)))
+            model_prediction += ones @ beta_variables[0]
 
-        # --- define objective function ---
+        model_prediction += X @ beta_variables[1]
+
+                # --- define objective function ---
         #   l1 weights w_i are identified with coefs in usual elastic net
         #   l2 weights nu_i are fixed to unity in adaptive elastic net
 
         # /2 * n_samples to make it consistent with sklearn (asgl uses /n_samples)
-        model_prediction = X @ beta_variables
-        cross_entropy_loss = -cvxpy.sum(
-            y * cvxpy.log(self.signoid(model_prediction)) + (1 - y) * cvxpy.log(1 - self.signoid(model_prediction))) / (2*n_samples)
+        cross_entropy_loss =  (-self.C/(2*n_samples))*cvxpy.sum(
+            cvxpy.multiply(y, model_prediction) - cvxpy.logistic(model_prediction)
+        )
 
         enet_coef = self.elastic_net().fit(X, y).coef_
 
         if self.rescale_EN == True:
             enet_coef = (1+(1-self.l1_ratio)/(2*self.C))*enet_coef
 
-        weights = 1.0 / (np.maximum(np.abs(enet_coef), self.eps_coef) ** self.gamma)
+        weights = 1.0 / (np.maximum((np.abs(enet_coef))** self.gamma, self.eps_coef))
 
         l1_coefs = self.l1_ratio * weights
-        l2_coefs = (1 - self.l1_ratio) * 1.0
-        l1_penalty = cvxpy.Constant(l1_coefs) @ cvxpy.abs(beta_variables)
-        l2_penalty = cvxpy.Constant(l2_coefs) * cvxpy.sum_squares(beta_variables)
+        l2_coefs = (1 - self.l1_ratio) * 0.5
+        l1_penalty = cvxpy.Constant(l1_coefs) @ cvxpy.abs(beta_variables[1])
+        l2_penalty = cvxpy.Constant(l2_coefs) * cvxpy.sum_squares(beta_variables[1])
 
         constraints = [b >= 0 for b in beta_variables] if self.positive else []
 
         # --- optimization ---
         problem = cvxpy.Problem(
-            cvxpy.Minimize(self.C * cross_entropy_loss+ l1_penalty + l2_penalty), constraints=constraints
+            cvxpy.Minimize(cross_entropy_loss + l1_penalty + l2_penalty), constraints=constraints
         )
-        # OSQP seems to be default for our problem.
-        problem.solve(solver=self.solver_Adaptive, max_iter=self.max_iter)
+        problem.solve(solver=self.solver_Adaptive, max_iters=self.max_iter)
 
         if problem.status != "optimal":
             raise ConvergenceWarning(
