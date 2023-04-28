@@ -84,18 +84,16 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierM
         precompute=False,
         max_iter=4000,
         copy_X=True,
-        solver_Adaptive="ECOS",
         solver_ENet = 'saga',
         tol=1e-4,
         positive=False,
         positive_tol=1e-4,
         random_state=None,
         eps_coef=1e-6,
-        warm_start = False
+        warm_start = False,
+        verbose_Ada = False
     ):
         params_asgl = dict(model="logistic", penalization="asgl")
-        if solver_Adaptive is not None:
-            params_asgl["solver"] = solver_Adaptive
         if tol is not None:
             params_asgl["tol"] = tol
 
@@ -113,10 +111,10 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierM
         self.random_state = random_state
         self.eps_coef = eps_coef
         self.solver_ENet = solver_ENet
-        self.solver_Adaptive = solver_Adaptive
         self.warm_start = warm_start
         self.rescale_EN = rescale_EN # Whether or not to apply Zou and Hastie 2005 rescaling of the ENet coefficients (Naive EN vs. EN)
         #(this distinction was dropped in Friedman et al. 2010 however.)
+        self.verbose_Ada = verbose_Ada # whether to print the results of the optimization problem 
 
         if not self.fit_intercept:
             raise NotImplementedError
@@ -246,13 +244,17 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierM
         problem = cvxpy.Problem(
             cvxpy.Minimize(cross_entropy_loss + l1_penalty + l2_penalty), constraints=constraints
         )
-        problem.solve(solver=self.solver_Adaptive, max_iters=self.max_iter)
+        problem.solve(solver='ECOS', 
+                      max_iters=self.max_iter, 
+                      verbose = self.verbose_Ada,
+                      warm_start = self.warm_start
+                      )
+        
+        print(problem.status)
 
-        if problem.status != "optimal":
-            raise ConvergenceWarning(
-                f"Solver did not reach optimum (Status: {problem.status})"
-            )
-
+        if problem.status != cvxpy.OPTIMAL:
+            print("Solver did not converge within {} iterations".format(max_iters))
+            
         beta_sol = np.concatenate([b.value for b in beta_variables], axis=0)
         beta_sol[np.abs(beta_sol) < self.tol] = 0
 
