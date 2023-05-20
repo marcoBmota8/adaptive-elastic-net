@@ -9,16 +9,13 @@ import numbers
 import warnings
 import cvxpy
 import numpy as np
-from asgl import ASGL
-from sklearn.base import MultiOutputMixin
-from sklearn.base import ClassifierMixin
-from sklearn.exceptions import ConvergenceWarning
+from sklearn.base import MultiOutputMixin,ClassifierMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils import check_X_y
 from sklearn.utils.validation import check_is_fitted
 
 
-class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierMixin):
+class AdaptiveElasticNet(LogisticRegression,ClassifierMixin, MultiOutputMixin):
     """
     Objective function is
 
@@ -91,30 +88,44 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierM
         random_state=None,
         eps_coef=1e-6,
         warm_start = False,
-        verbose_Ada = False
+        printing_solver = False,
+        multi_class = 'auto',
+        n_jobs = 10
     ):
-        params_asgl = dict(model="logistic", penalization="asgl")
-        if tol is not None:
-            params_asgl["tol"] = tol
-
-        super().__init__(**params_asgl)
 
         self.C = C
         self.l1_ratio = l1_ratio
         self.gamma = gamma
+        self.tol = tol
         self.fit_intercept = fit_intercept
         self.max_iter = max_iter
         self.precompute = precompute
         self.copy_X = copy_X
         self.positive = positive
         self.positive_tol = positive_tol
+        self.n_jobs = n_jobs
         self.random_state = random_state
         self.eps_coef = eps_coef
         self.solver_ENet = solver_ENet
         self.warm_start = warm_start
         self.rescale_EN = rescale_EN # Whether or not to apply Zou and Hastie 2005 rescaling of the ENet coefficients (Naive EN vs. EN)
         #(this distinction was dropped in Friedman et al. 2010 however.)
-        self.verbose_Ada = verbose_Ada # whether to print the results of the optimization problem 
+        self.multi_class=multi_class
+        self.printing_solver = printing_solver # whether or not to print the solver details on the convergence
+
+        super().__init__(
+            C = self.C,
+            l1_ratio= self.l1_ratio,
+            solver=self.solver_ENet,
+            penalty='elasticnet',
+            fit_intercept=self.fit_intercept,
+            random_state=self.random_state,
+            max_iter=self.max_iter,
+            warm_start=self.warm_start,
+            n_jobs = self.n_jobs,
+            tol = self.tol,
+            multi_class=self.multi_class
+            )
 
         if not self.fit_intercept:
             raise NotImplementedError
@@ -144,6 +155,8 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierM
                 multi_output=True,
                 y_numeric=True,
             )
+            self.classes_ = np.unique(y)
+
         self.coef_, self.intercept_, self.enet_coef_, self.weights_ = self._ae(X, y)
 
         self.dual_gap_ = np.array([np.nan])
@@ -153,17 +166,17 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierM
 
     def predict(self, X):
         check_is_fitted(self, ["coef_", "intercept_"])
-        return super(LogisticRegression, self).predict(X)
+        return super().predict(X)
     
     def predict_proba(self, X):
         check_is_fitted(self, ["coef_", "intercept_"])
-        return super(LogisticRegression,self).predict_proba(X)
+        return super().predict_proba(X)
     
     def score(self):
         '''
         Default metric is naive accuracy (highly unwanted but that is Sklearn policy)
         '''
-        return super(LogisticRegression,self).score()
+        return super().score()
 
     def elastic_net(self, **params):
         """
@@ -206,13 +219,13 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierM
         """
         check_X_y(X, y)
 
-        n_samples, n_features = X.shape
-        beta_variables = [cvxpy.Variable(n_features)]
+        self.n_samples, self.n_features = X.shape
+        beta_variables = [cvxpy.Variable(self.n_features)]
         model_prediction = 0.0
 
         if self.fit_intercept == True:
             beta_variables = [cvxpy.Variable(1)]+beta_variables
-            ones = cvxpy.Constant(np.ones((n_samples,1)))
+            ones = cvxpy.Constant(np.ones((self.n_samples,1)))
             model_prediction += ones @ beta_variables[0]
 
         model_prediction += X @ beta_variables[1]
@@ -222,11 +235,12 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierM
         #   l2 weights nu_i are fixed to unity in adaptive elastic net
 
         # /2 * n_samples to make it consistent with sklearn (asgl uses /n_samples)
-        cross_entropy_loss =  (-self.C/(2*n_samples))*cvxpy.sum(
+        cross_entropy_loss =  (-self.C/(2*self.n_samples))*cvxpy.sum(
             cvxpy.multiply(y, model_prediction) - cvxpy.logistic(model_prediction)
         )
-
-        enet_coef = self.elastic_net().fit(X, y).coef_
+        
+        self.ENet = self.elastic_net().fit(X, y)
+        enet_coef = self.ENet.coef_
 
         if self.rescale_EN == True:
             enet_coef = (1+(1-self.l1_ratio)/(2*self.C))*enet_coef
@@ -238,27 +252,32 @@ class AdaptiveElasticNet(ASGL, LogisticRegression, MultiOutputMixin, ClassifierM
         l1_penalty = cvxpy.Constant(l1_coefs) @ cvxpy.abs(beta_variables[1])
         l2_penalty = cvxpy.Constant(l2_coefs) * cvxpy.sum_squares(beta_variables[1])
 
+        # Positive coefficients constraint
         constraints = [b >= 0 for b in beta_variables] if self.positive else []
 
         # --- optimization ---
         problem = cvxpy.Problem(
             cvxpy.Minimize(cross_entropy_loss + l1_penalty + l2_penalty), constraints=constraints
         )
-        problem.solve(solver='ECOS', 
-                      max_iters=self.max_iter, 
-                      verbose = self.verbose_Ada,
-                      warm_start = self.warm_start
-                      )
-        
-        print(problem.status)
 
-        if problem.status != cvxpy.OPTIMAL:
-            print("Solver did not converge within {} iterations".format(max_iters))
-            
+        problem.solve(solver='SCS', 
+                      max_iters=self.max_iter, 
+                      eps = self.tol
+                      )
+
+        
+        if self.printing_solver == True:
+            if problem.status != cvxpy.OPTIMAL:
+                print("Problem status was {}; Solver did not converge within {} iterations".format(
+                    problem.status,self.max_iter))
+            if problem.status == cvxpy.OPTIMAL:
+                print("Optimal: Iterations used: {}".format(problem.solver_stats.num_iters))
+
         beta_sol = np.concatenate([b.value for b in beta_variables], axis=0)
         beta_sol[np.abs(beta_sol) < self.tol] = 0
 
-        intercept, coef = beta_sol[0], beta_sol[1:]
+        intercept, coef = np.array([beta_sol[0]]), beta_sol[1:]
+        coef = coef.reshape(1,self.n_features)
 
         # Check if constraint violation is less than positive_tol.
         if self.positive and self.positive_tol is not None:
