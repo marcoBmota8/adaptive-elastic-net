@@ -205,7 +205,7 @@ class AdaptiveElasticNet(LogisticRegression,ClassifierMixin, MultiOutputMixin):
 
         return elastic_net
 
-    def _ae(self, X, y) -> (np.array, float):
+    def _ae(self, X, y):
         """
         Adaptive elastic-net counterpart of ASGL.asgl
 
