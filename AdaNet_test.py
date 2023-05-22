@@ -1,6 +1,6 @@
 # %%
 import numpy as np
-from aenet_2 import AdaptiveElasticNet
+from aenet import AdaptiveElasticNet
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score,average_precision_score
 from sklearn.model_selection import train_test_split
@@ -34,7 +34,6 @@ AdaNet = AdaptiveElasticNet(
 
 AdaNet.set_params(**params_AdaNet)
 ENet.set_params(**params_ENet)
-# %%
 
 # %%
 X_train, X_HOS, y_train, y_HOS = train_test_split(X_test, y_test, test_size=0.3, random_state=42)

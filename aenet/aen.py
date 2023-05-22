@@ -244,12 +244,18 @@ class AdaptiveElasticNet(LogisticRegression,ClassifierMixin, MultiOutputMixin):
             cvxpy.Minimize(cross_entropy_loss + l1_penalty + l2_penalty), constraints=constraints
         )
 
-        problem.solve(solver='ECOS', 
+        # problem.solve(solver='ECOS', 
+        #               max_iters=self.max_iter,
+        #               abstol = self.tol,
+        #               verbose = self.AdaNet_solver_verbose
+        #               )
+        
+        problem.solve(solver='SCS', 
                       max_iters=self.max_iter,
-                      abstol = self.tol,
+                      eps = self.tol,
                       verbose = self.AdaNet_solver_verbose
                       )
-        
+
         if self.printing_solver:
             if problem.status != cvxpy.OPTIMAL:
                 print("Problem status was {}; Solver did not converge within {} iterations".format(
@@ -271,7 +277,7 @@ class AdaptiveElasticNet(LogisticRegression,ClassifierMixin, MultiOutputMixin):
 
 
         intercept, coef = np.array([beta_sol[0]]), beta_sol[1:]
-        # coef = coef.reshape(1,self.n_features)
+        coef = coef.reshape(1,self.n_features)
 
         # Check if constraint violation is less than positive_tol.
         if self.positive and self.positive_tol is not None:
