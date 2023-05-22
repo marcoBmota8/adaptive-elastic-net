@@ -218,7 +218,7 @@ class AdaptiveElasticNet(LogisticRegression,ClassifierMixin, MultiOutputMixin):
         #   l2 weights nu_i are fixed to unity in adaptive elastic net
 
         #/2 * n_samples to make it consistent with sklearn (asgl uses /n_samples)
-        cross_entropy_loss =  -(self.C/(2*self.n_samples))*cvxpy.sum(
+        cross_entropy_loss =  cvxpy.Constant(-self.C/(2*self.n_samples))*cvxpy.sum(
             cvxpy.multiply(y, model_prediction) - cvxpy.logistic(model_prediction)
         )
         
