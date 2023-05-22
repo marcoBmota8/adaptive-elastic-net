@@ -13,6 +13,9 @@ from sklearn.base import MultiOutputMixin,ClassifierMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils import check_X_y
 from sklearn.utils.validation import check_is_fitted
+import logging
+import sys
+logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class AdaptiveElasticNet(LogisticRegression,ClassifierMixin, MultiOutputMixin):
@@ -229,7 +232,7 @@ class AdaptiveElasticNet(LogisticRegression,ClassifierMixin, MultiOutputMixin):
         if self.rescale_EN == True:
             enet_coef = (1+(1-self.l1_ratio)/(2*self.C))*enet_coef
 
-        weights = 1.0 / (np.maximum((np.abs(enet_coef))** self.gamma, self.eps_coef))
+        weights = 1.0 / (np.maximum(np.abs(enet_coef), self.eps_coef)** self.gamma)
 
         l1_coefs = self.l1_ratio * weights
         l2_coefs = (1 - self.l1_ratio) * 0.5

@@ -13,7 +13,7 @@ for key in file:
     exec(key + " = file['" + key + "']")
 # %%
 # define the models
-params_AdaNet = {'C':1,'l1_ratio':0.5, 'gamma':1}
+params_AdaNet = {'C':2.23,'l1_ratio':0.675, 'gamma':0.234}
 params_ENet = params_AdaNet.copy()
 del params_ENet['gamma']
 
@@ -28,7 +28,7 @@ ENet = LogisticRegression(
 AdaNet = AdaptiveElasticNet(
     AdaNet_solver_verbose=True,
     warm_start=True, 
-    max_iter=4000,
+    max_iter=10000,
     printing_solver = True
 )
 
