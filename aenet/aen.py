@@ -250,12 +250,14 @@ class AdaptiveElasticNet(LogisticRegression,ClassifierMixin, MultiOutputMixin):
                         abstol = self.tol,
                         verbose = self.AdaNet_solver_verbose
                         )
+            self.solver = 'ECOS'
         except:
             problem.solve(solver='SCS', 
                         max_iters=self.max_iter,
                         eps = self.tol,
                         verbose = self.AdaNet_solver_verbose
                         )
+            self.solver = 'SCS'
 
         if self.printing_solver:
             if problem.status != cvxpy.OPTIMAL:
