@@ -10,12 +10,12 @@ from CML_tool.oracle_model_eval import compute_metrics
 # Import dataset
 file  = np.load(
     # '/home/barbem4/projects/Initial SLE dataset/Linear models SLE/Synthetic data/Data/oracle_dataset_1/n1000_dt15_dn0_corrpercent0_nstd0_corr0_TMcorrN/data.npz')
-    '/home/barbem4/projects/Initial SLE dataset/Linear models SLE/Synthetic data/Data/oracle_dataset_1/n1000_dt50_dn1975_corrpercent0_nstd0_corr0.05_TMcorrY/data.npz')
+    '/home/barbem4/projects/Initial SLE dataset/Linear models SLE/Synthetic data/Data/oracle_dataset_2/n1000_dt15_dn10_corrpercent0_nstd0_corr0_TMcorrN/data.npz')
 for key in file:
     exec(key + " = file['" + key + "']")
 # %%
 # define the models
-params_AdaNet = {'C':2.5,'l1_ratio':0.9, 'gamma':1, 'nu':0.3}
+params_AdaNet =  {'C': 0.2942264723246768, 'l1_ratio': 0.29408329644256426, 'nu': 0.4605830639847419, 'gamma': 0.5}
 params_ENet = params_AdaNet.copy()
 del params_ENet['gamma']
 del params_ENet['nu']
@@ -23,7 +23,7 @@ del params_ENet['nu']
 ENet = LogisticRegression(
     penalty = 'elasticnet',
     warm_start=True, 
-    max_iter=4000,
+    max_iter=1000,
     solver = 'saga',
     tol = 1e-6
     )
@@ -31,9 +31,9 @@ ENet = LogisticRegression(
 # %%
 AdaNet = AdaptiveElasticNet(
     AdaNet_solver_verbose=True,
-    AdaNet_solver = 'SCS',
+    AdaNet_solver = 'default',
     warm_start=True, 
-    max_iter=4000,
+    max_iter=1000,
     printing_solver = True,
     tol = 1e-6)
 
@@ -82,3 +82,4 @@ ENet_metrics_dict = compute_metrics(
     )
 print("ENet: ", ENet_metrics_dict)
 print("AdaNet: ", AdaNet_metrics_dict)
+# %%

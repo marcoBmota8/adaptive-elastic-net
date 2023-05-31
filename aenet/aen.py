@@ -117,7 +117,10 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
 
         self.classes_ = np.unique(y)
 
-        self.coef_, self.intercept_, self.enet_coef_, self.weights_ = self._ae(np.asarray(X), np.asarray(y))
+        if self.fit_intercept:
+            self.coef_, self.intercept_, self.enet_coef_, self.weights_ = self._ae(np.asarray(X), np.asarray(y))
+        else:
+            self.coef_, self.enet_coef_, self.weights_ = self._ae(np.asarray(X), np.asarray(y))
 
         return self
 
@@ -164,13 +167,11 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
 
     def _ae(self, X, y):
         """
-        Adaptive elastic-net counterpart of ASGL.asgl
-
         Returns
         -------
         (coef, intercept, enet_coef, weights)
             - coef : np.array, shape (n_features,)
-            - intercept : float
+            - intercept : float (if requested via fit_intercept)
             - enet_coef : np.array, shape (n_features,)
             - weights : np.array, shape (n_features,)
         """
@@ -184,19 +185,35 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         nonzero_enet_coef = enet_coef[nonzero_idx]
         
         self.n_samples, self.n_features = X.shape
-        
-        # Only execute Adaptive ENet if some features are nonzero
-        if len(nonzero_enet_coef>0):
+        n = self.n_samples
 
-            n,m = X[:,nonzero_idx].shape
+        beta0_included = False
+        other_betas = False
 
-            if self.fit_intercept:
-                init_pen = 1
-                X_exp = np.c_[np.ones(n),X[:,nonzero_idx]]
+        if len(nonzero_idx)>0:
+            other_betas=True
+
+        if self.fit_intercept:
+            if (self.ENet.intercept_!=0):
+                beta0_included = True
+                nonzero_enet_coef = np.insert(nonzero_enet_coef,0, self.ENet.intercept_)
+                if other_betas:
+                    n,m = X[:,nonzero_idx].shape
+                else:
+                    m = 0
                 m+=1
-
             else:
-                init_pen = 0
+                if other_betas:
+                    n,m = X[:,nonzero_idx].shape
+
+        # Only execute Adaptive ENet if some coefficient(s) are nonzero
+        if (other_betas) or (beta0_included):
+            if beta0_included:
+                if other_betas:
+                    X_exp = np.c_[np.ones(n),X[:,nonzero_idx]]
+                else: 
+                    X_exp = np.ones((1,n))
+            else:
                 X_exp = X[:,nonzero_idx]
 
             #Zou and Hastie 2005 rescaling of ElasticNet coefficients to naive ElasticNet coefficients
@@ -205,21 +222,20 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
                 enet_coef = EN_rescale_ctant*enet_coef
                 
             beta_variables = cvxpy.Variable(m)
-            model_prediction = X_exp @ beta_variables
+            print(X_exp.shape, beta_variables.shape)
+            model_prediction = X_exp@beta_variables
 
             #Loss
             cross_entropy_loss = self.C * cvxpy.sum(-cvxpy.multiply(model_prediction, y) + cvxpy.logistic(model_prediction)) #Negative log likelihood
 
             weights = (np.abs(nonzero_enet_coef))**-self.gamma
-            if m-init_pen == 0:
-                l1_coefs = cvxpy.Parameter(None, nonneg=True)
-            else:
-                l1_coefs = cvxpy.Parameter(m-init_pen, nonneg=True)
+            
+            l1_coefs = cvxpy.Parameter(m, nonneg=True)
             l1_coefs = self.nu * weights
             l2_coefs = cvxpy.Parameter(1, nonneg = True)
             l2_coefs = (1 - self.l1_ratio) * 0.5
-            l1_penalty = cvxpy.norm(l1_coefs @ cvxpy.abs(beta_variables[init_pen:]), 1)
-            l2_penalty = l2_coefs * cvxpy.sum_squares(beta_variables[init_pen:])
+            l1_penalty = cvxpy.norm(l1_coefs @ cvxpy.abs(beta_variables), 1)
+            l2_penalty = l2_coefs * cvxpy.sum_squares(beta_variables)
 
             # Constrain that those coefficients that were zero for ENet are zero for AdaNet as well.
             constraints = []
@@ -270,15 +286,30 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
                         np.round(100*problem.solver_stats.num_iters/self.max_iter, decimals = 1),
                         self.max_iter
                         ))
+            else:
+                # Suppress CVXPY UserWarning
+                warnings.filterwarnings("ignore", category=UserWarning, module="cvxpy", lineno=123)
 
             try:
                 beta_sol = beta_variables.value
                 beta_sol[np.abs(beta_sol) < self.tol] = 0
 
-                intercept, coef_values = np.array([beta_sol[0]]), beta_sol[1:]
+                if (beta0_included) and (other_betas):
+                    intercept, coef_values = np.array([beta_sol[0]]), beta_sol[1:]
+                elif other_betas:
+                    coef_values = beta_sol
+                    if self.fit_intercept:
+                        intercept = np.array([0])
+                elif beta0_included:
+                    intercept = beta_sol
+                    
                 coef = np.zeros(self.n_features)
-                coef[nonzero_idx] = coef_values
-                coef = np.reshape(coef,(1,self.n_features))
+
+                try:
+                    coef[nonzero_idx] = coef_values
+                    coef = np.reshape(coef,(1,self.n_features))
+                except:
+                    coef = np.reshape(coef,(1,self.n_features))
 
             except:
                 coef = np.zeros((1,self.n_features))
@@ -293,12 +324,16 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
 
         else:
             coef = np.zeros((1,self.n_features))
-            intercept = 0
+            if self.fit_intercept:
+                intercept = np.array([0])   
             if self.printing_solver:
-                logging.info('Penalty did not select any nonzero feature.')
+                logging.info('Penalty did not select any nonzero feature: Model is trivial')
             weights = np.inf*np.ones((1,self.n_features))
-            
-        return (coef, intercept, enet_coef, weights)
+        
+        if self.fit_intercept:
+            return (coef, intercept, enet_coef, weights)
+        else:
+            return (coef, enet_coef, weights)
     
     def _cvxpy_solver_options(self, solver):
         if solver == 'ECOS':
