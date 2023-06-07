@@ -15,7 +15,7 @@ for key in file:
     exec(key + " = file['" + key + "']")
 # %%
 # define the models
-params_AdaNet =  {'C': 0.2942264723246768, 'l1_ratio': 0.29408329644256426, 'nu': 0.4605830639847419, 'gamma': 0.5}
+params_AdaNet =  {'C': 1000.2942264723246768, 'l1_ratio': 0.29408329644256426, 'nu': 0.4605830639847419, 'gamma': 0.5}
 params_ENet = params_AdaNet.copy()
 del params_ENet['gamma']
 del params_ENet['nu']
@@ -35,7 +35,7 @@ AdaNet = AdaptiveElasticNet(
     warm_start=True, 
     max_iter=1000,
     printing_solver = True,
-    tol = 1e-6)
+    tol = 1e-8)
 
 AdaNet.set_params(**params_AdaNet)
 ENet.set_params(**params_ENet)

@@ -32,16 +32,17 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
     -solver_ENet: (default = 'saga')
     -AdaNet_solver: What cvxpy solver to use to minimize the AdaNet loss function. By default is the option 'default' that leaves cvxpy teh option to use the most
     appropriate. User can input any solver. If either 'default' or user-defined solver fails the model tries to use either 'ECOS' or 'SCS' to find a 
-    suboptimal solution. If none of those works, it reports zero coefficients (trivial solution). (default = 'default')
+    suboptimal solution. If none of those works, it reports zero coefficients (trivial solution). (default = 'CVOXPT')
     -AdaNet_solver_verbose: print out the verbose of the AdaNet solver: cvxpy solver ECOS. (default = False)
     -positive: Positive constraint on coefficients (default = False)
     -positive_tol: When positive = True, cvxpy optimization may still return slightly negative values. 
         If coef > -positive_tol, ignore this and forcively set negative coef to zero.
         Otherwise, raise ValueError.(default = 1e-4)
+    -refinement: number of iterative refinement steps for CVXOPT solver. (default = 10)
     -random_state:(default = None)
     -warm_start: (default = False)
     -printing_solver: Whether or not to print the details of the optimization solver solution (default = False)
-    -n_jobs: (default = 1)
+    -n_jobs: (default = 10)
     -copy_X (default: True)
     
     Objective function is
@@ -73,6 +74,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         solver_ENet = 'saga',
         AdaNet_solver_verbose = False,
         AdaNet_solver = 'default',
+        refinement = 10,
         tol=1e-4,
         positive=False,
         positive_tol=1e-4,
@@ -106,6 +108,10 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         self.AdaNet_solver = AdaNet_solver
         self.printing_solver = printing_solver # whether or not to print the solver details on the convergence
         self.AdaNet_solver_verbose = AdaNet_solver_verbose
+        self.refinement = refinement # number of iterative refinement steps for CVXOPT solver
+
+        if not self.fit_intercept:
+            raise NotImplementedError('AdaNet only suspports models with intercept. Set fit_intercept = True.')
 
 
     def fit(self, X, y):
@@ -117,10 +123,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
 
         self.classes_ = np.unique(y)
 
-        if self.fit_intercept:
-            self.coef_, self.intercept_, self.enet_coef_, self.weights_ = self._ae(np.asarray(X), np.asarray(y))
-        else:
-            self.coef_, self.enet_coef_, self.weights_ = self._ae(np.asarray(X), np.asarray(y))
+        self.coef_, self.intercept_, self.enet_coef_, self.weights_ = self._ae(np.asarray(X), np.asarray(y))
 
         return self
 
@@ -185,155 +188,116 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         nonzero_enet_coef = enet_coef[nonzero_idx]
         
         self.n_samples, self.n_features = X.shape
-        n = self.n_samples
 
-        beta0_included = False
-        other_betas = False
-
+        non_trivial = False
         if len(nonzero_idx)>0:
-            other_betas=True
+            non_trivial = True
+            n,m = X[:,nonzero_idx].shape
+        else:
+            m = 0
+            n = self.n_samples
 
         if self.fit_intercept:
-            if (self.ENet.intercept_!=0):
-                beta0_included = True
-                nonzero_enet_coef = np.insert(nonzero_enet_coef,0, self.ENet.intercept_)
-                if other_betas:
-                    n,m = X[:,nonzero_idx].shape
-                else:
-                    m = 0
-                m+=1
-            else:
-                if other_betas:
-                    n,m = X[:,nonzero_idx].shape
+            m+=1
+            init_pen = 1
+            if non_trivial:
+                X_exp = np.c_[np.ones(n),X[:,nonzero_idx]]
 
-        # Only execute Adaptive ENet if some coefficient(s) are nonzero
-        if (other_betas) or (beta0_included):
-            if beta0_included:
-                if other_betas:
-                    X_exp = np.c_[np.ones(n),X[:,nonzero_idx]]
-                else: 
-                    X_exp = np.ones((1,n))
-            else:
-                X_exp = X[:,nonzero_idx]
+                #Zou and Hastie 2005 rescaling of ElasticNet coefficients to naive ElasticNet coefficients
+                if self.rescale_EN:
+                    EN_rescale_ctant = 1+((1-self.l1_ratio)/(2*self.C))
+                    enet_coef = EN_rescale_ctant*enet_coef
+                    
+                beta_variables = cvxpy.Variable(m)
+                model_prediction = X_exp@beta_variables
 
-            #Zou and Hastie 2005 rescaling of ElasticNet coefficients to naive ElasticNet coefficients
-            if self.rescale_EN:
-                EN_rescale_ctant = 1+((1-self.l1_ratio)/(2*self.C))
-                enet_coef = EN_rescale_ctant*enet_coef
+                #Loss
+                cross_entropy_loss = self.C * cvxpy.sum(-cvxpy.multiply(model_prediction, y) + cvxpy.logistic(model_prediction)) #Negative log likelihood
+
+                weights = (np.abs(nonzero_enet_coef))**-self.gamma
                 
-            beta_variables = cvxpy.Variable(m)
-            print(X_exp.shape, beta_variables.shape)
-            model_prediction = X_exp@beta_variables
+                l1_coefs = cvxpy.Parameter(m-1, nonneg=True)
+                l1_coefs = self.nu * weights
+                l2_coefs = cvxpy.Parameter(1, nonneg = True)
+                l2_coefs = (1 - self.l1_ratio) * 0.5
+                l1_penalty = cvxpy.norm(l1_coefs @ cvxpy.abs(beta_variables[init_pen:]), 1)
+                l2_penalty = l2_coefs * cvxpy.sum_squares(beta_variables[init_pen:])
 
-            #Loss
-            cross_entropy_loss = self.C * cvxpy.sum(-cvxpy.multiply(model_prediction, y) + cvxpy.logistic(model_prediction)) #Negative log likelihood
+                # Constrain that those coefficients that were zero for ENet are zero for AdaNet as well.
+                constraints = []
 
-            weights = (np.abs(nonzero_enet_coef))**-self.gamma
-            
-            l1_coefs = cvxpy.Parameter(m, nonneg=True)
-            l1_coefs = self.nu * weights
-            l2_coefs = cvxpy.Parameter(1, nonneg = True)
-            l2_coefs = (1 - self.l1_ratio) * 0.5
-            l1_penalty = cvxpy.norm(l1_coefs @ cvxpy.abs(beta_variables), 1)
-            l2_penalty = l2_coefs * cvxpy.sum_squares(beta_variables)
+                # Positive coefficients constraint
+                if self.positive:
+                    constraints.append([b >= 0 for b in beta_variables])
 
-            # Constrain that those coefficients that were zero for ENet are zero for AdaNet as well.
-            constraints = []
+                # --- optimization ---
+                #/2 * n_samples to make it consistent with sklearn
+                problem = cvxpy.Problem(
+                    objective = cvxpy.Minimize(cross_entropy_loss/(2*n) + l1_penalty + l2_penalty),
+                    constraints=constraints
+                ) 
 
-            # Positive coefficients constraint
-            if self.positive:
-                constraints.append([b >= 0 for b in beta_variables])
-
-            # --- optimization ---
-            #/2 * n_samples to make it consistent with sklearn
-            problem = cvxpy.Problem(
-                objective = cvxpy.Minimize(cross_entropy_loss/(2*n) + l1_penalty + l2_penalty),
-                constraints=constraints
-            ) 
-
-            try:
-                if self.AdaNet_solver == 'default':
-                    problem.solve(warm_start=True)
-                    logging.info(
-                        "Default solver used. Parameters max_iter and tol disregarded, consider SCS or ECOS as solver")
-                else:
-                    solver_dict = self._cvxpy_solver_options(solver=self.AdaNet_solver)
-                    problem.solve(**solver_dict)
-            except (ValueError, cvxpy.error.SolverError):
-                if self.printing_solver:
-                    logging.warning(
-                        'Selected solver failed. Using alternative options. Check solver and solver_stats for more details')
-                solvers = list(set(['ECOS', 'SCS']).symmetric_difference(set([self.AdaNet_solver])))
-                for solver in solvers:
-                    solver_dict = self._cvxpy_solver_options(solver=solver)
-                    try:
+                try:
+                    if self.AdaNet_solver == 'default':
+                        problem.solve(warm_start=True)
+                        logging.info(
+                            "Default solver used. Parameters max_iter and tol disregarded, consider SCS or ECOS as solver")
+                    else:
+                        solver_dict = self._cvxpy_solver_options(solver=self.AdaNet_solver)
                         problem.solve(**solver_dict)
-                        if 'optimal' in problem.status:
-                            self.AdaNet_solver = solver
-                            break
-                    except (ValueError, cvxpy.error.SolverError):
-                        continue
-                
-            self.solver_stats = problem.solver_stats
-            self.solver_status = problem.status
-                
-            if self.printing_solver:
-                if problem.status in ["infeasible", "unbounded"]:
-                    logging.warning('Optimization problem status failure')
-                elif problem.status not in ["infeasible", "unbounded"]:                 
-                    logging.info("Problem status was {} used {}% of max iterations = {}".format(
-                        problem.status,
-                        np.round(100*problem.solver_stats.num_iters/self.max_iter, decimals = 1),
-                        self.max_iter
-                        ))
-            else:
-                # Suppress CVXPY UserWarning
-                warnings.filterwarnings("ignore", category=UserWarning, module="cvxpy", lineno=123)
+                except (ValueError, cvxpy.error.SolverError):
+                    if self.printing_solver:
+                        logging.warning(
+                            'Selected solver failed. Using alternative options. Check solver and solver_stats for more details')
+                    solvers = list(set(['ECOS', 'SCS', 'CVXOPT']).symmetric_difference(set([self.AdaNet_solver])))
+                    for solver in solvers:
+                        solver_dict = self._cvxpy_solver_options(solver=solver)
+                        try:
+                            problem.solve(**solver_dict)
+                            if 'optimal' in problem.status:
+                                self.AdaNet_solver = solver
+                                break
+                        except (ValueError, cvxpy.error.SolverError):
+                            continue
+                    
+                self.solver_stats = problem.solver_stats
+                self.solver_status = problem.status
+                    
+                if self.printing_solver:
+                    if problem.status in ["infeasible", "unbounded"]:
+                        logging.warning('Optimization problem status failure')
+                    elif problem.status not in ["infeasible", "unbounded"]:                 
+                        logging.info("Problem status was {} used {}% of max iterations = {}".format(
+                            problem.status,
+                            np.round(100*problem.solver_stats.num_iters/self.max_iter, decimals = 1),
+                            self.max_iter
+                            ))
+                else:
+                    # Suppress CVXPY UserWarning
+                    warnings.filterwarnings("ignore", category=UserWarning)
 
-            try:
                 beta_sol = beta_variables.value
                 beta_sol[np.abs(beta_sol) < self.tol] = 0
 
-                if (beta0_included) and (other_betas):
-                    intercept, coef_values = np.array([beta_sol[0]]), beta_sol[1:]
-                elif other_betas:
-                    coef_values = beta_sol
-                    if self.fit_intercept:
-                        intercept = np.array([0])
-                elif beta0_included:
-                    intercept = beta_sol
-                    
+                intercept, coef_values = np.array([beta_sol[0]]), beta_sol[1:]
                 coef = np.zeros(self.n_features)
+                coef[nonzero_idx] = coef_values
+                coef = np.reshape(coef,(1,self.n_features))
 
-                try:
-                    coef[nonzero_idx] = coef_values
-                    coef = np.reshape(coef,(1,self.n_features))
-                except:
-                    coef = np.reshape(coef,(1,self.n_features))
+                # Check if constraint violation is less than positive_tol.
+                if self.positive and self.positive_tol is not None:
+                    if not all(c.value(self.positive_tol) for c in constraints):
+                        raise ValueError(f"positive_tol is violated. coef is:\n{coef}")
 
-            except:
+            else:
                 coef = np.zeros((1,self.n_features))
-                intercept = 0
-                if self.printing_solver:
-                    logging.warning('Optimization failed: Coefficients were set to zero')
-
-            # Check if constraint violation is less than positive_tol.
-            if self.positive and self.positive_tol is not None:
-                if not all(c.value(self.positive_tol) for c in constraints):
-                    raise ValueError(f"positive_tol is violated. coef is:\n{coef}")
-
-        else:
-            coef = np.zeros((1,self.n_features))
-            if self.fit_intercept:
                 intercept = np.array([0])   
-            if self.printing_solver:
-                logging.info('Penalty did not select any nonzero feature: Model is trivial')
-            weights = np.inf*np.ones((1,self.n_features))
+                if self.printing_solver:
+                    logging.info('Penalty did not select any nonzero feature: Model is trivial')
+                weights = np.inf*np.ones((1,self.n_features))
         
-        if self.fit_intercept:
-            return (coef, intercept, enet_coef, weights)
-        else:
-            return (coef, enet_coef, weights)
+        return (coef, intercept, enet_coef, weights)
+  
     
     def _cvxpy_solver_options(self, solver):
         if solver == 'ECOS':
@@ -350,6 +314,14 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
                                verbose = self.AdaNet_solver_verbose,
                                warm_start = self.warm_start
                                )
+        elif solver == 'CVXOPT':
+            solver_dict = dict(solver=solver,
+                        max_iters=self.max_iter,
+                        abstol = self.tol,
+                        refinement = self.refinement,
+                        verbose = self.AdaNet_solver_verbose,
+                        warm_start = self.warm_start
+                        )
         else:
             solver_dict = dict(solver=solver)
 
