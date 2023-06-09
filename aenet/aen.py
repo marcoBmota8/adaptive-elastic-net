@@ -7,6 +7,7 @@ Adapted from: https://github.com/simaki/adaptive-elastic-net -> Regressor (at th
 
 import numbers
 import warnings
+from sklearn.exceptions import ConvergenceWarning
 import cvxpy
 import numpy as np
 from sklearn.base import MultiOutputMixin,ClassifierMixin
@@ -106,7 +107,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         self.rescale_EN = rescale_EN # Whether or not to apply Zou and Hastie 2005 rescaling of the ENet coefficients (Naive EN vs. EN)
         #(this distinction was dropped in Friedman et al. 2010 however.)
         self.AdaNet_solver = AdaNet_solver
-        self.printing_solver = printing_solver # whether or not to print the solver details on the convergence
+        self.printing_solver = printing_solver # whether or not to print the solver details on optimization (convergence warnings, etc)
         self.AdaNet_solver_verbose = AdaNet_solver_verbose
         self.refinement = refinement # number of iterative refinement steps for CVXOPT solver
 
@@ -179,6 +180,13 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
             - weights : np.array, shape (n_features,)
         """
         check_X_y(X, y)
+
+        if not self.printing_solver:
+            # Suppress ConvergenceWarning
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            # Suppress CVXPY UserWarning
+            warnings.filterwarnings("ignore", category=UserWarning)
+
 
         #Fit naive ElasticNet
         self.ENet = self.elastic_net().fit(X, y)
@@ -272,9 +280,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
                             np.round(100*problem.solver_stats.num_iters/self.max_iter, decimals = 1),
                             self.max_iter
                             ))
-                else:
-                    # Suppress CVXPY UserWarning
-                    warnings.filterwarnings("ignore", category=UserWarning)
+        
 
                 beta_sol = beta_variables.value
                 beta_sol[np.abs(beta_sol) < self.tol] = 0
