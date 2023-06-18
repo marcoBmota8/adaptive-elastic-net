@@ -39,10 +39,13 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
     -positive_tol: When positive = True, cvxpy optimization may still return slightly negative values. 
         If coef > -positive_tol, ignore this and forcively set negative coef to zero.
         Otherwise, raise ValueError.(default = 1e-4)
+    -eps_constant: Small constant to avoid dividing by zero when constructing the adptive weights (default 1e-6).
     -refinement: number of iterative refinement steps for CVXOPT solver. (default = 10)
     -random_state:(default = None)
     -warm_start: (default = False)
     -printing_solver: Whether or not to print the details of the optimization solver solution (default = False)
+    -force_solver: Whether to force the usage of the passed solver to optimize AdaNet optimization. 
+        If it fails, the oprimization will fail and no attempt will be made with alternative solvers. (default = False)
     -n_jobs: (default = 10)
     -copy_X (default: True)
     
@@ -75,6 +78,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         solver_ENet = 'saga',
         AdaNet_solver_verbose = False,
         AdaNet_solver = 'default',
+        eps_constant = 1e-6,
         refinement = 10,
         tol=1e-4,
         positive=False,
@@ -82,6 +86,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         random_state=None,
         warm_start = False,
         printing_solver = False,
+        force_solver = False,
         n_jobs = 1
     ):
         #inherit parameters from LogisticRegression class 
@@ -104,11 +109,13 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         self.copy_X = copy_X
         self.positive = positive
         self.positive_tol = positive_tol
+        self.eps_constant = eps_constant # Small constant to avouid dividing by zero when constructing the adaptive weights
         self.rescale_EN = rescale_EN # Whether or not to apply Zou and Hastie 2005 rescaling of the ENet coefficients (Naive EN vs. EN)
         #(this distinction was dropped in Friedman et al. 2010 however.)
         self.AdaNet_solver = AdaNet_solver
         self.printing_solver = printing_solver # whether or not to print the solver details on optimization (convergence warnings, etc)
         self.AdaNet_solver_verbose = AdaNet_solver_verbose
+        self.force_solver = force_solver # Whether force to use the selected solver
         self.refinement = refinement # number of iterative refinement steps for CVXOPT solver
 
         if not self.fit_intercept:
@@ -191,60 +198,54 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         #Fit naive ElasticNet
         self.ENet = self.elastic_net().fit(X, y)
         enet_coef = self.ENet.coef_.ravel()
-        #Get the indexes of nonzero coefficients
-        nonzero_idx = np.nonzero(enet_coef)[0]
-        nonzero_enet_coef = enet_coef[nonzero_idx]
-        
+
         self.n_samples, self.n_features = X.shape
+        n,m = self.n_samples,self.n_features
 
-        non_trivial = False
-        if len(nonzero_idx)>0:
-            non_trivial = True
-            n,m = X[:,nonzero_idx].shape
-        else:
-            m = 0
-            n = self.n_samples
+        #Get the indexes of the zero coefficient features
+        zero_idx = np.where(enet_coef==0)[0]
 
-        if self.fit_intercept:
-            m+=1
-            init_pen = 1
-            if non_trivial:
-                X_exp = np.c_[np.ones(n),X[:,nonzero_idx]]
+        if len(zero_idx)<self.n_features:
+            if self.fit_intercept:
+                init_pen = 1
+                m+=1
 
-                #Zou and Hastie 2005 rescaling of ElasticNet coefficients to naive ElasticNet coefficients
-                if self.rescale_EN:
-                    EN_rescale_ctant = 1+((1-self.l1_ratio)/(2*self.C))
-                    enet_coef = EN_rescale_ctant*enet_coef
-                    
-                beta_variables = cvxpy.Variable(m)
-                model_prediction = X_exp@beta_variables
-
-                #Loss
-                cross_entropy_loss = self.C * cvxpy.sum(-cvxpy.multiply(model_prediction, y) + cvxpy.logistic(model_prediction)) #Negative log likelihood
-
-                weights = (np.abs(nonzero_enet_coef))**-self.gamma
+            #Zou and Hastie 2005 rescaling of ElasticNet coefficients to naive ElasticNet coefficients
+            if self.rescale_EN:
+                EN_rescale_ctant = 1+((1-self.l1_ratio)/(2*self.C))
+                enet_coef = EN_rescale_ctant*enet_coef
                 
-                l1_coefs = cvxpy.Parameter(m-1, nonneg=True)
-                l1_coefs = self.nu * weights
-                l2_coefs = cvxpy.Parameter(1, nonneg = True)
-                l2_coefs = (1 - self.l1_ratio) * 0.5
-                l1_penalty = cvxpy.norm(l1_coefs @ cvxpy.abs(beta_variables[init_pen:]), 1)
-                l2_penalty = l2_coefs * cvxpy.sum_squares(beta_variables[init_pen:])
+            beta_variables = cvxpy.Variable(m)
+            X_exp = np.c_[np.ones((X.shape[0],1)), X]
+            model_prediction = X_exp@beta_variables
 
-                # Constrain that those coefficients that were zero for ENet are zero for AdaNet as well.
-                constraints = []
+            #Loss
+            cross_entropy_loss = self.C * (cvxpy.sum(-cvxpy.multiply(model_prediction, y) + cvxpy.logistic(model_prediction))) #Negative log likelihood
 
-                # Positive coefficients constraint
-                if self.positive:
-                    constraints.append([b >= 0 for b in beta_variables])
+            weights = np.maximum(np.abs(enet_coef), self.eps_constant)**-self.gamma
+            
+            l1_coefs = cvxpy.Parameter(m-init_pen, nonneg=True)
+            l1_coefs = weights
+            l2_coefs = cvxpy.Parameter(1, nonneg=True)
+            l2_coefs = (1 - self.l1_ratio) * 0.5
+            l1_penalty = self.nu * cvxpy.norm(cvxpy.multiply(l1_coefs,beta_variables[init_pen:]), 1)
+            l2_penalty = l2_coefs * cvxpy.norm(beta_variables[init_pen:],2)**2
 
-                # --- optimization ---
-                #/2 * n_samples to make it consistent with sklearn
-                problem = cvxpy.Problem(
-                    objective = cvxpy.Minimize(cross_entropy_loss/(2*n) + l1_penalty + l2_penalty),
-                    constraints=constraints
-                ) 
+            # Constrain that those coefficients that were zero for ENet are zero for AdaNet as well.
+            constraints = [beta_variables[idx] == 0 for idx in zero_idx+init_pen]
 
+            # Positive coefficients constraint
+            if self.positive:
+                constraints.append([b >= 0 for b in beta_variables])
+
+            # --- optimization ---
+            #/2 * n_samples to make it consistent with sklearn
+            problem = cvxpy.Problem(
+                objective = cvxpy.Minimize(cross_entropy_loss + l1_penalty + l2_penalty),
+                constraints=constraints
+            ) 
+            
+            if not self.force_solver:
                 try:
                     if self.AdaNet_solver == 'default':
                         problem.solve(warm_start=True)
@@ -257,7 +258,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
                     if self.printing_solver:
                         logging.warning(
                             'Selected solver failed. Using alternative options. Check solver and solver_stats for more details')
-                    solvers = list(set(['ECOS', 'SCS', 'CVXOPT']).symmetric_difference(set([self.AdaNet_solver])))
+                    solvers = list(set(['SCS','CVXOPT','ECOS']).symmetric_difference(set([self.AdaNet_solver])))
                     for solver in solvers:
                         solver_dict = self._cvxpy_solver_options(solver=solver)
                         try:
@@ -267,48 +268,49 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
                                 break
                         except (ValueError, cvxpy.error.SolverError):
                             continue
-                    
-                self.solver_stats = problem.solver_stats
-                self.solver_status = problem.status
-                    
-                if self.printing_solver:
-                    if problem.status in ["infeasible", "unbounded"]:
-                        logging.warning('Optimization problem status failure')
-                    elif problem.status not in ["infeasible", "unbounded"]:                 
-                        logging.info("Problem status was {} used {}% of max iterations = {}".format(
-                            problem.status,
-                            np.round(100*problem.solver_stats.num_iters/self.max_iter, decimals = 1),
-                            self.max_iter
-                            ))
-        
-
-                beta_sol = beta_variables.value
-                beta_sol[np.abs(beta_sol) < self.tol] = 0
-
-                intercept, coef_values = np.array([beta_sol[0]]), beta_sol[1:]
-                coef = np.zeros(self.n_features)
-                coef[nonzero_idx] = coef_values
-                coef = np.reshape(coef,(1,self.n_features))
-
-                # Check if constraint violation is less than positive_tol.
-                if self.positive and self.positive_tol is not None:
-                    if not all(c.value(self.positive_tol) for c in constraints):
-                        raise ValueError(f"positive_tol is violated. coef is:\n{coef}")
-
             else:
-                coef = np.zeros((1,self.n_features))
-                intercept = np.array([0])   
-                if self.printing_solver:
-                    logging.info('Penalty did not select any nonzero feature: Model is trivial')
-                weights = np.inf*np.ones((1,self.n_features))
+                solver_dict = self._cvxpy_solver_options(solver=self.AdaNet_solver)
+                problem.solve(**solver_dict)
+
+                
+            self.solver_stats = problem.solver_stats
+            self.solver_status = problem.status
+                
+            if self.printing_solver:
+                if problem.status in ["infeasible", "unbounded"]:
+                    logging.warning('Optimization problem status failure')
+                elif problem.status not in ["infeasible", "unbounded"]:                 
+                    logging.info("Problem status was {} used {}% of max iterations = {}".format(
+                        problem.status,
+                        np.round(100*problem.solver_stats.num_iters/self.max_iter, decimals = 1),
+                        self.max_iter
+                        ))
+
+
+            beta_sol = beta_variables.value
+            beta_sol[np.abs(beta_sol) < self.tol] = 0
+
+            intercept, coef = np.array([beta_sol[0]]), beta_sol[1:]
+            coef = np.reshape(coef,(1,self.n_features))
+
+            # Check if constraint violation is less than positive_tol.
+            if self.positive and self.positive_tol is not None:
+                if not all(c.value(self.positive_tol) for c in constraints):
+                    raise ValueError(f"positive_tol is violated. coef is:\n{coef}")
         
-        return (coef, intercept, enet_coef, weights)
+        else:
+            coef = np.zeros((1,self.n_features))
+            if self.printing_solver:
+                logging.info('Penalty did not select any nonzero feature: Model is trivial and retuned ENet intercept')
+            weights = np.inf*np.ones((1,self.n_features))
+            intercept = self.ENet.intercept_
+        
+        return coef, intercept, enet_coef, weights
   
     
     def _cvxpy_solver_options(self, solver):
         if solver == 'ECOS':
             solver_dict = dict(solver=solver,
-                                abstol = self.tol,
                                 verbose = self.AdaNet_solver_verbose,
                                 warm_start = self.warm_start,
                                 max_iters = self.max_iter
@@ -316,14 +318,12 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         elif solver == 'SCS':
             solver_dict = dict(solver=solver,
                                max_iters=self.max_iter,
-                               eps = self.tol,
                                verbose = self.AdaNet_solver_verbose,
                                warm_start = self.warm_start
                                )
         elif solver == 'CVXOPT':
             solver_dict = dict(solver=solver,
                         max_iters=self.max_iter,
-                        abstol = self.tol,
                         refinement = self.refinement,
                         verbose = self.AdaNet_solver_verbose,
                         warm_start = self.warm_start
