@@ -4,21 +4,49 @@ from aenet import AdaptiveElasticNet
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score,average_precision_score, roc_curve
 from sklearn.model_selection import train_test_split
+from sklearn.datasets import make_classification
 from CML_tool.oracle_model_eval import compute_metrics
 import time
 
 # %%
-# Import dataset
-file  = np.load(
-    '/home/barbem4/projects/Initial SLE dataset/Linear models SLE/Synthetic data/Data/oracle_dataset_1/n751_dt50_dn1950_corrpercent0_nstd0_corr0_TMcorrN/data.npz')
-for key in file:
-    exec(key + " = file['" + key + "']")
+#Generate data 
+X,y = make_classification(
+    n_samples = 751,
+    n_features = 2000,
+    n_informative= 50,
+    n_redundant= 40,
+    n_repeated = 0,
+    n_classes = 2,
+    n_clusters_per_class = 1,
+    random_state = 42
+)
 
+# Generate random weights
+weights = np.random.rand(X.shape[1])
+
+# Set some coefficients to zero
+fraction_of_zeros = 0.9
+# Calculate the number of elements to set to zero
+num_zeros = int(fraction_of_zeros * weights.size)
+
+# Generate a boolean mask with True values indicating which elements to set to zero
+mask = np.random.choice([True, False], size=weights.size, replace=True, p=[num_zeros/weights.size, 1 - num_zeros/weights.size])
+
+# Set the selected elements to zero
+weights[mask] = 0
+
+# Compute the linear response
+linear_response = np.dot(X, weights)
+
+# Apply the logistic link function to get y
+p = 1 / (1 + np.exp(-linear_response))
+# draw binary labels from binomial distribution
+y = np.random.binomial(1,p)
 # %%
 # define the models
-params_AdaNet ={'C': 0.058234438087374954,
- 'l1_ratio': 0.7808043007350488,
- 'nu': 4.279609652414873e-09,
+params_AdaNet ={'C':2.5,
+ 'l1_ratio': 0.9,
+ 'nu':0.0002,
  'gamma': 1}
 params_ENet = params_AdaNet.copy()
 del params_ENet['gamma']
@@ -28,7 +56,7 @@ del params_ENet['nu']
 ENet = LogisticRegression(
     penalty = 'elasticnet',
     warm_start=True, 
-    max_iter=4000,
+    max_iter=2000,
     solver = 'saga',
     tol = 1e-4
     )
@@ -39,11 +67,11 @@ AdaNet = AdaptiveElasticNet(
     AdaNet_solver = 'default',
     refinement=5,
     warm_start=True, 
-    max_iter=4000,
+    max_iter=2000,
     force_solver=False,
     printing_solver = False,
     rescale_EN=True,
-    eps_constant=1e-21,
+    eps_constant=1e-6,
     tol = 1e-4)
 
 # %%
@@ -51,13 +79,7 @@ AdaNet.set_params(**params_AdaNet)
 ENet.set_params(**params_ENet)
 
 # %%
-X_train, X_HOS, y_train, y_HOS = train_test_split(X_test, y_test, test_size=0.3, random_state=42)
-
-# X_train = X_train[:,0:60]
-# y_train = y_train[:]
-
-# X_HOS = X_HOS[:,0:60]
-# y_HOS = y_HOS[:]
+X_train, X_HOS, y_train, y_HOS = train_test_split(X, y, test_size=0.3, random_state=42)
 
 # %%
 start_time_ENet = time.time()
@@ -99,11 +121,11 @@ print('AUCPR: ENet-sklearn({}), Ada-ENet({}) and AdaNet({})'.format(
 # %%
 # Test oracle properties
 AdaNet_metrics_dict = compute_metrics(
-    true_model_coefs = file['beta_test'],
+    true_model_coefs = weights.ravel(),
     model_coefs = AdaNet.coef_.ravel()
     )
 ENet_metrics_dict = compute_metrics(
-    true_model_coefs = file['beta_test'],
+    true_model_coefs = weights.ravel(),
     model_coefs = ENet.coef_.ravel()
     )
 print("ENet: ", ENet_metrics_dict)
