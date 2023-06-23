@@ -33,20 +33,20 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
     -solver_ENet: (default = 'saga')
     -AdaNet_solver: What cvxpy solver to use to minimize the AdaNet loss function. By default is the option 'default' that leaves cvxpy teh option to use the most
     appropriate. User can input any solver. If either 'default' or user-defined solver fails the model tries to use either 'ECOS' or 'SCS' to find a 
-    suboptimal solution. If none of those works, it reports zero coefficients (trivial solution). (default = 'CVOXPT')
+    suboptimal solution. If none of those works, it reports zero coefficients (trivial solution). (default = 'default')
     -AdaNet_solver_verbose: print out the verbose of the AdaNet solver: cvxpy solver ECOS. (default = False)
     -positive: Positive constraint on coefficients (default = False)
     -positive_tol: When positive = True, cvxpy optimization may still return slightly negative values. 
         If coef > -positive_tol, ignore this and forcively set negative coef to zero.
         Otherwise, raise ValueError.(default = 1e-4)
-    -eps_constant: Small constant to avoid dividing by zero when constructing the adptive weights (default 1e-6).
+    -eps_constant: Small constant to avoid dividing by zero when constructing the adptive weights (default 1e-15).
     -refinement: number of iterative refinement steps for CVXOPT solver. (default = 10)
     -random_state:(default = None)
     -warm_start: (default = False)
     -printing_solver: Whether or not to print the details of the optimization solver solution (default = False)
     -force_solver: Whether to force the usage of the passed solver to optimize AdaNet optimization. 
         If it fails, the oprimization will fail and no attempt will be made with alternative solvers. (default = False)
-    -n_jobs: (default = 10)
+    -n_jobs: (default = 1)
     -copy_X (default: True)
     
     Objective function is
@@ -78,7 +78,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         solver_ENet = 'saga',
         AdaNet_solver_verbose = False,
         AdaNet_solver = 'default',
-        eps_constant = 1e-6,
+        eps_constant = 1e-15,
         refinement = 10,
         tol=1e-4,
         positive=False,
@@ -239,7 +239,6 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
                 constraints.append([b >= 0 for b in beta_variables])
 
             # --- optimization ---
-            #/2 * n_samples to make it consistent with sklearn
             problem = cvxpy.Problem(
                 objective = cvxpy.Minimize(cross_entropy_loss + l1_penalty + l2_penalty),
                 constraints=constraints
@@ -271,7 +270,6 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
             else:
                 solver_dict = self._cvxpy_solver_options(solver=self.AdaNet_solver)
                 problem.solve(**solver_dict)
-
                 
             self.solver_stats = problem.solver_stats
             self.solver_status = problem.status

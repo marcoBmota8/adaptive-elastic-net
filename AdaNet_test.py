@@ -10,16 +10,13 @@ import time
 # %%
 # Import dataset
 file  = np.load(
-    '/home/barbem4/projects/Initial SLE dataset/Linear models SLE/Synthetic data/Data/oracle_dataset_1/n751_dt50_dn1950_corrpercent0_nstd0_corr0_TMcorrN/data.npz')
+    '/home/barbem4/projects/Initial SLE dataset/Linear models SLE/Synthetic data/Data/oracle_dataset_1/n751_dt50_dn1950_corrpercent0_nstd0.05_corr0_TMcorrN/data.npz')
 for key in file:
     exec(key + " = file['" + key + "']")
 
 # %%
 # define the models
-params_AdaNet ={'C': 0.058234438087374954,
- 'l1_ratio': 0.7808043007350488,
- 'nu': 4.279609652414873e-09,
- 'gamma': 1}
+params_AdaNet = {'C': 2.0532061684132424e-07, 'l1_ratio': 0.7873397646239548, 'nu': 0.009759762332391751, 'gamma': 1}
 params_ENet = params_AdaNet.copy()
 del params_ENet['gamma']
 del params_ENet['nu']
@@ -42,8 +39,8 @@ AdaNet = AdaptiveElasticNet(
     max_iter=4000,
     force_solver=False,
     printing_solver = False,
-    rescale_EN=True,
-    eps_constant=1e-21,
+    rescale_EN=False,
+    eps_constant=1e-15,
     tol = 1e-4)
 
 # %%
