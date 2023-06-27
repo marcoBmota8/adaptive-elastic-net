@@ -16,7 +16,7 @@ for key in file:
 
 # %%
 # define the models
-params_AdaNet = {'C': 2.0532061684132424e-07, 'l1_ratio': 0.7873397646239548, 'nu': 0.009759762332391751, 'gamma': 1}
+params_AdaNet = {'C': 1.8532061684132424, 'l1_ratio': 0.873397646239548, 'nu': 0.002759762332391751, 'gamma': 1}
 params_ENet = params_AdaNet.copy()
 del params_ENet['gamma']
 del params_ENet['nu']
@@ -34,6 +34,7 @@ ENet = LogisticRegression(
 AdaNet = AdaptiveElasticNet(
     AdaNet_solver_verbose=False,
     AdaNet_solver = 'default',
+    SIS_method = 'one-less',
     refinement=5,
     warm_start=True, 
     max_iter=4000,
@@ -70,13 +71,13 @@ print("AdaNet execution time:", end_time_AdaNet-start_time_AdaNet, "seconds")
 # %%
 # print the number of nonzero features
 print('ENet nonzero coefficients: ', sum(ENet.coef_.ravel()!=0))
-print('AdaNet-ENet nonzero coefficients: ', sum(AdaNet.ENet.coef_.ravel()!=0))
+print('AdaNet-ENet nonzero coefficients: ', sum(AdaNet.enet_coef_.ravel()!=0))
 print('AdaNet nonzero coefficients: ', sum(AdaNet.coef_.ravel()!=0))
 
 
 # %%
 # Test of coefficients
-print('ENet coefficient cummulative difference: ',sum(abs(ENet.coef_.ravel()-AdaNet.ENet.coef_.ravel())))
+print('ENet coefficient cummulative difference: ',sum(abs(ENet.coef_.ravel()-AdaNet.enet_coef_.ravel())))
 print('ENet-AdaNet coefficient cummulative difference: ',sum(abs(ENet.coef_.ravel()-AdaNet.coef_.ravel())))
 
 # %%
@@ -84,12 +85,12 @@ print('ENet-AdaNet coefficient cummulative difference: ',sum(abs(ENet.coef_.rave
 
 print('AUROC: ENet-sklearn({}), Ada-ENet({}) and AdaNet({})'.format(
 roc_auc_score(y_true=y_HOS, y_score=ENet.predict_proba(X_HOS)[:,1]),
-roc_auc_score(y_true=y_HOS, y_score=AdaNet.ENet.predict_proba(X_HOS)[:,1]),
+roc_auc_score(y_true=y_HOS, y_score=AdaNet.predict_proba_ENet(X_HOS)[:,1]),
 roc_auc_score(y_true=y_HOS, y_score=AdaNet.predict_proba(X_HOS)[:,1])
 ))
 print('AUCPR: ENet-sklearn({}), Ada-ENet({}) and AdaNet({})'.format(
     average_precision_score(y_true=y_HOS, y_score=ENet.predict_proba(X_HOS)[:,1]),
-    average_precision_score(y_true=y_HOS, y_score=AdaNet.ENet.predict_proba(X_HOS)[:,1]),
+    average_precision_score(y_true=y_HOS, y_score=AdaNet.predict_proba_ENet(X_HOS)[:,1]),
     average_precision_score(y_true=y_HOS, y_score=AdaNet.predict_proba(X_HOS)[:,1])
 ))
 
