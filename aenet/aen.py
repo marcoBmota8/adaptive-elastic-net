@@ -39,10 +39,9 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
     suboptimal solution. If none of those works, it reports zero coefficients (trivial solution). (default = 'default')
     -AdaNet_solver_verbose: print out the verbose of the AdaNet solver: cvxpy solver ECOS. (default = False)
     -positive: Positive constraint on coefficients (default = False)
-    -positive_tol: When positive = True, cvxpy optimization may still return slightly negative values. 
-        If coef > -positive_tol, ignore this and forcively set negative coef to zero.
-        Otherwise, raise ValueError.(default = 1e-4)
-    -eps_constant: Small constant to avoid dividing by zero when constructing the adptive weights (default 1e-15).
+    -Nonzero_tol: Sparseness threshold for small coefficients returned during optimization. It accepts float values,'default' or None. 'default' estimated the threshold
+    as ENet tolerance. None does no thresholding. (default = 'default')
+    -eps_constant: Small constant to avoid dividing by zero when constructing the adptive weights (default 1e-8).
     -refinement: number of iterative refinement steps for CVXOPT solver. (default = 10)
     -random_state:(default = None)
     -warm_start: (default = False)
@@ -82,11 +81,11 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         solver_ENet = 'saga',
         AdaNet_solver_verbose = False,
         AdaNet_solver = 'default',
-        eps_constant = 1e-15,
+        eps_constant = 1e-8,
         refinement = 10,
         tol=1e-4,
         positive=False,
-        positive_tol=1e-4,
+        nonzero_tol='default',
         random_state=None,
         warm_start = False,
         printing_solver = False,
@@ -113,7 +112,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         self.copy_X = copy_X
         self.SIS_method = SIS_method #Determines how many features to keep after sure independence screening method
         self.positive = positive
-        self.positive_tol = positive_tol
+        self.nonzero_tol = nonzero_tol
         self.eps_constant = eps_constant # Small constant to avouid dividing by zero when constructing the adaptive weights
         self.rescale_EN = rescale_EN # Whether or not to apply Zou and Hastie 2005 rescaling of the ENet coefficients (Naive EN vs. EN)
         #(this distinction was dropped in Friedman et al. 2010 however.)
@@ -148,7 +147,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         exp_pred = np.exp(-linear_pred)
         pos_probas = 1/(1+exp_pred)
         neg_probas = 1-pos_probas.flatten()
-        return np.hstack((pos_probas,neg_probas.reshape(-1,1)))
+        return np.hstack((neg_probas.reshape(-1,1),pos_probas))
     
     def score(self):
         '''
@@ -165,7 +164,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         - **params
             Overwrite parameters.
 
-        Returns
+        Returns     
         -------
         elastic_net : ElasticNet
         """
@@ -212,6 +211,8 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
             self.n_out = n-1
         elif self.SIS_method == 'log':
             self.n_out = int(n/np.log(n))
+        elif isinstance(self.SIS_method, int) or isinstance(self.SIS_method, float):
+            self.n_out = self.SIS_method
         elif isinstance(self.SIS_method, str):
             raise ValueError('Wrong SIS method string. Available options are one-less, log or an integer.')
 
@@ -279,7 +280,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         # Get the indexes of the zero coefficient features
         zero_idx = np.where(enet_coef==0)[0]
 
-        if len(zero_idx)<self.n_features:
+        if len(zero_idx)<m:
             if self.fit_intercept:
                 init_pen = 1
                 m+=1
@@ -294,14 +295,14 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
             model_prediction = X_exp@beta_variables
 
             # Loss
-            cross_entropy_loss = self.C * (cvxpy.sum(-cvxpy.multiply(model_prediction, y) + cvxpy.logistic(model_prediction))) #Negative log likelihood
+            cross_entropy_loss = cvxpy.sum(-cvxpy.multiply(model_prediction, y) + cvxpy.logistic(model_prediction)) #Negative log likelihood
 
-            weights = np.maximum(np.abs(enet_coef), self.eps_constant)**-self.gamma
+            weights = (np.abs(enet_coef)+self.eps_constant)**-self.gamma
             
             l1_coefs = cvxpy.Parameter(m-init_pen, nonneg=True)
             l1_coefs = weights
             l2_coefs = cvxpy.Parameter(1, nonneg=True)
-            l2_coefs = (1 - self.l1_ratio) * 0.5
+            l2_coefs = (1 - self.l1_ratio)/(2*self.C)
             l1_penalty = self.nu * cvxpy.norm(cvxpy.multiply(l1_coefs,beta_variables[init_pen:]), 1)
             l2_penalty = l2_coefs * cvxpy.norm(beta_variables[init_pen:],2)**2
 
@@ -322,11 +323,13 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
                 try:
                     if self.AdaNet_solver == 'default':
                         problem.solve(warm_start=True)
-                        logging.info(
-                            "Default solver used. Parameters max_iter and tol disregarded, consider SCS or ECOS as solver")
+                        if  self.printing_solver:
+                            logging.info(
+                                "Default solver used. Parameters max_iter and tol disregarded, consider SCS or ECOS as solver")
                     else:
                         solver_dict = self._cvxpy_solver_options(solver=self.AdaNet_solver)
                         problem.solve(**solver_dict)
+
                 except (ValueError, cvxpy.error.SolverError):
                     if self.printing_solver:
                         logging.warning(
@@ -360,18 +363,34 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
 
 
             beta_sol = beta_variables.value
-            beta_sol[np.abs(beta_sol) < self.tol] = 0
-
-            intercept, coef_values = np.array([beta_sol[0]]), beta_sol[1:]
             
-            # set coefficient arrary of the input data dimensionality
-            coef = self.replace_values_in_coef_array(
-                values=coef_values,
-                positions=self.idx_out,
-                out_array_length=self.n_features,
-                fill_value=0.0  
-            )
+            try:
+                if self.nonzero_tol == 'default':
+                    self.nonzero_tol = self.tol
+                    beta_sol[np.abs(beta_sol) < self.nonzero_tol] = 0
+                elif isinstance(self.nonzero_tol,float):
+                    beta_sol[np.abs(beta_sol) < self.nonzero_tol] = 0
+                else:
+                    pass
 
+                intercept, coef_values = np.array([beta_sol[0]]), beta_sol[1:]
+
+                # set coefficient arrary of the input data dimensionality
+                coef = self.replace_values_in_coef_array(
+                    values=coef_values,
+                    positions=self.idx_out,
+                    out_array_length=self.n_features,
+                    fill_value=0.0 
+                )
+
+            except:
+                # if the above gives an error is probably due to a large penalty
+                # which makes the loss hard to minimize and the optimization problem being unbounded (no solution found).
+                # In both cases, set all coefficients to zero. 
+                intercept = np.array([0])
+                coef = np.zeros((1,self.n_features))
+
+            
             # set ENet coefficient array of the input data dimensionality
             enet_coef = self.replace_values_in_coef_array(
                 values = enet_coef,
@@ -381,6 +400,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
             )
         
         else:
+            enet_coef = np.zeros((1,self.n_features))
             coef = np.zeros((1,self.n_features))
             if self.printing_solver:
                 logging.info('Penalty did not select any nonzero feature: Model is trivial and retuned ENet intercept')

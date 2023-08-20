@@ -16,7 +16,10 @@ for key in file:
 
 # %%
 # define the models
-params_AdaNet = {'C': 1.8532061684132424, 'l1_ratio': 0.873397646239548, 'nu': 0.002759762332391751, 'gamma': 1}
+params_AdaNet = {'C': 1.5e-1,
+ 'l1_ratio': 0.3160815048309521,
+ 'nu': 1.232511206135,
+ 'gamma': 1}
 params_ENet = params_AdaNet.copy()
 del params_ENet['gamma']
 del params_ENet['nu']
@@ -41,7 +44,8 @@ AdaNet = AdaptiveElasticNet(
     force_solver=False,
     printing_solver = False,
     rescale_EN=False,
-    eps_constant=1e-15,
+    eps_constant=1e-8,
+    nonzero_tol='default',
     tol = 1e-4)
 
 # %%
@@ -106,7 +110,9 @@ ENet_metrics_dict = compute_metrics(
     )
 print("ENet: ", ENet_metrics_dict)
 print("AdaNet: ", AdaNet_metrics_dict)
+
+# %%
+print(AdaNet.AdaNet_solver)
 # %%
 
-print(AdaNet.AdaNet_solver)
 # %%
