@@ -2,6 +2,9 @@
 Author: Marco Barbero
 Start Date of implementation: 10th April 2023
 Description: Adaptive elastic net model classifier
+Version: In this version, the adanet loss only includes the full problem dimensionality.
+A constraint is imposed on the optimization problem so that the naive ENet non-active set
+features must be zero.
 '''
 
 import numbers
@@ -113,7 +116,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         self.SIS_method = SIS_method #Determines how many features to keep after sure independence screening method
         self.positive = positive
         self.nonzero_tol = nonzero_tol
-        self.eps_constant = eps_constant # Small constant to avouid dividing by zero when constructing the adaptive weights
+        self.eps_constant = eps_constant # Small constant to avoid dividing by zero when constructing the adaptive weights
         self.rescale_EN = rescale_EN # Whether or not to apply Zou and Hastie 2005 rescaling of the ENet coefficients (Naive EN vs. EN)
         #(this distinction was dropped in Friedman et al. 2010 however.)
         self.AdaNet_solver = AdaNet_solver
