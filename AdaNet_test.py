@@ -1,6 +1,6 @@
 # %%
 import numpy as np
-from aenet import AdaptiveElasticNet
+from aenet.aenV2 import AdaptiveElasticNet
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score,average_precision_score, roc_curve
 from sklearn.model_selection import train_test_split

@@ -8,7 +8,7 @@ the naive ENet active set. Those features in the non-active hard-thresholded.
 
 import numbers
 import pandas as pd
-import warnings
+import warnings 
 from sklearn.exceptions import ConvergenceWarning
 import cvxpy
 import numpy as np
@@ -304,7 +304,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
             # Loss
             cross_entropy_loss = cvxpy.sum(-cvxpy.multiply(model_prediction, y) + cvxpy.logistic(model_prediction)) #Negative log likelihood
 
-            weights = (np.abs(enet_coef)+self.eps_constant)**-self.gamma
+            weights = (np.abs(enet_coef[nonzero_idx])+self.eps_constant)**-self.gamma
             
             l1_coefs = cvxpy.Parameter(m-init_pen, nonneg=True)
             l1_coefs = weights
