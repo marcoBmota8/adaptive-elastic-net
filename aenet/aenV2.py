@@ -35,7 +35,8 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
     -tol: Absolute tolerance/accuracy in the solution (coefficients) that is passed to both Elastic Net and Adaptive Elastic Net solvers.(default = 1e-4)
     -solver_ENet: (default = 'saga')
     -SIS_method: Method used to calculate ihow many features to keep after teh sure independence screening. As recommended in 
-        Fan and Lv 2008,  this can be'one-less' (n-1), 'log' (n/log(n)), a user-defined integer or None if no screening is desired. (default = 'log')
+        Fan and Lv 2008,  this can be'one-less' (n-1), 'log' (n/log(n)), a user-defined integer or None if no screening is desired. 
+        If the input dimensionality is too high and 'log' gives a number >number of intances SIS defaults to the number of instances.(default = 'log')
     -AdaNet_solver: What cvxpy solver to use to minimize the AdaNet loss function. By default is the option 'default' that leaves cvxpy teh option to use the most
     appropriate. User can input any solver. If either 'default' or user-defined solver fails the model tries to use either 'ECOS' or 'SCS' to find a 
     suboptimal solution. If none of those works, it reports zero coefficients (trivial solution). (default = 'default')
@@ -140,11 +141,13 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         check_is_fitted(self, ["coef_", "intercept_"])
         return super().predict(np.asarray(X))
     
-    def predict_proba(self, X):
+    def predict_proba(self, X): 
         check_is_fitted(self, ["coef_", "intercept_"])
         return super().predict_proba(np.asarray(X))
     
     def predict_proba_ENet(self,X):
+        if isinstance(X, pd.DataFrame):
+            X = X.values
         linear_pred = X@self.enet_coef_.T+self.enet_intercept_
         exp_pred = np.exp(-linear_pred)
         pos_probas = 1/(1+exp_pred)
@@ -213,6 +216,8 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
             self.n_out = n-1
         elif self.SIS_method == 'log':
             self.n_out = int(n/np.log(n))
+            if self.n_out > n:
+                self.n_out = n
         elif isinstance(self.SIS_method, int) or isinstance(self.SIS_method, float):
             self.n_out = self.SIS_method
         elif isinstance(self.SIS_method, str):
@@ -264,10 +269,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         # Sure independence screening
         if self.SIS_method != None:
             self.idx_out, self.omega = self.sure_independence_screening(X,y)
-            try:
-                X = X[:,self.idx_out] # Select the features that passed the screening
-            except:
-                pass
+            X = X[:,self.idx_out] # Select the features that passed the screening
         else:
             self.idx_out = None
             self.omega = None
@@ -277,9 +279,10 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         enet_coef = self.ENet.coef_.ravel()
 
         # Get the indexes of the zero coefficient features
-        zero_idx = np.where(enet_coef==0)[0]
+        zero_idx = np.where(enet_coef.ravel()==0)[-1]
+        
         # Get the indexes of the NONzero coefficient features
-        nonzero_idx = np.where(enet_coef!=0)[0]
+        nonzero_idx = np.array(list(set(np.arange(self.n_features))-set(zero_idx)))
 
         # Select the data on the naive ENet active set 
         X = X[:, nonzero_idx]
