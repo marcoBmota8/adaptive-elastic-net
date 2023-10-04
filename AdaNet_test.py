@@ -117,8 +117,6 @@ print("AdaNet: ", AdaNet_metrics_dict)
 print(AdaNet.AdaNet_solver)
 
 # %%
-SLE_AdaNet_params = {'C': 2.28718737442275, 'l1_ratio': 0.0587306615649446, 'nu': .0027745333515986, 'gamma': 1}
-AdaNet.set_params(**SLE_AdaNet_params)
 data_SLE = read_pickle(path = '/home/barbem4/projects/Data/Initial Data', filename='marco_ids_final_dates_df_no_unknowns.pkl')
 labels = read_pickle(path = '/home/barbem4/projects/Data/Initial Data', filename='SLE_binary_labels_no_unknowns.pkl')
 features_names = np.load('/home/barbem4/projects/Data/Initial Data/raw_names.npy', allow_pickle=True)
@@ -128,7 +126,7 @@ meta_df = read_pickle(path = '/home/barbem4/projects/Data/Initial Data', filenam
 AdaNet = AdaptiveElasticNet(
     AdaNet_solver_verbose=False,
     AdaNet_solver = 'default',
-    SIS_method = 4000,
+    SIS_method = 10,
     refinement=5,
     warm_start=True, 
     max_iter=4000,
@@ -139,9 +137,9 @@ AdaNet = AdaptiveElasticNet(
     nonzero_tol='default',
     tol = 1e-4)
 
-params_AdaNet = {'C': 1,
- 'l1_ratio': 0.9,
- 'nu': 1,
+params_AdaNet = {'C': 0.92936400068973167,
+ 'l1_ratio': 0.03894339606017799,
+ 'nu': 0.010625391786908087,
  'gamma': 1}
 
 AdaNet.set_params(**params_AdaNet)
@@ -149,13 +147,9 @@ AdaNet.set_params(**params_AdaNet)
 AdaNet.fit(data_SLE, labels)
 
 # %%
-print(np.array(features_names)[np.where(AdaNet.enet_coef_.ravel() != 0)[-1]])
+# print('ENet: ', np.array(features_names)[np.where(AdaNet.enet_coef_.ravel() != 0)[-1]])
 
-print(np.array(features_names)[np.where(AdaNet.coef_.ravel() != 0)[-1]])
+print('AdaNet: ', np.array(features_names)[np.where(AdaNet.coef_.ravel() != 0)[-1]])
 
 
-# %%
-print('AdaNet features: ',','.join(np.array(features_names)[np.where(AdaNet.coef_.ravel() != 0)[-1]]))
-# %%
-print('ENet features:',','.join(np.array(features_names)[np.where(AdaNet.enet_coef_.ravel() != 0)[-1]]))
 # %%

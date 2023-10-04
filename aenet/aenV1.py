@@ -224,22 +224,17 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         elif isinstance(self.SIS_method, str):
             raise ValueError('Wrong SIS method string. Available options are one-less, log or an integer.')
 
-        # Standardize the data columnwise
+        # # Standardize the data columnwise
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)  # Perform column-wise standardization
 
-        X1 = X[y==1] # Sample average of features with class label '1'
-        X0 = X[y==0] # Sample average of features with class label '0'
+        X1 = X_scaled[y==1] # Instances with class label '1'
+        X0 = X_scaled[y==0] # Instances with class label '0'
 
-        n1 = np.sum(y==1) # Number of samples from class '1'
-        n0 = np.sum(y==0) # Number of samples from class '0'
+        sum1 = np.sum(X1, axis = 0) # Featurewise sum of instances from class '1'
+        sum0 = np.sum(X0, axis = 0) # Featurewise sum of instances  from class '0'
 
-        mean_1 = np.mean(X1, axis=0)  # Sample average of features with class label '1'
-        mean_0 = np.mean(X0, axis=0)  # Sample average of features with class label '0'
-    
-        std = np.std(X, axis=0)  # Standard deviation of each feature
-    
-        omega = (n1 * mean_1 - n0 * mean_0) / np.maximum(std,self.eps_constant) #elementwise correlation scores of features with outcome
+        omega = sum1 - sum0 #elementwise correlation scores of features with outcome
 
         # find the index of the top n_out features
         abs_sorted_indices = np.argsort(-np.abs(omega))  # Sort in descending order
