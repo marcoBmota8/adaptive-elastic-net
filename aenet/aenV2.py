@@ -3,23 +3,27 @@ Author: Marco Barbero
 Start Date of implementation: 28th August 2023
 Description: Adaptive elastic net model classifier
 Version: In this version, the AdaNet loss optimization only includes the active set from
-the naive ENet active set. Those features in the non-active hard-thresholded.
+the naive ENet active set. Those features in the non-active hard-thresholded to zero instead
+of passing the full dimensionality and a zero constraint to the optimizer.
 '''
+import sys
+import logging 
+logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-import numbers
+import warnings
+# Suppress the PearsonRConstantInputWarning
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=\
+                        "An input array is constant; the correlation coefficient is not defined.*")
+
 import pandas as pd
-import warnings 
 from sklearn.exceptions import ConvergenceWarning
 import cvxpy
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from scipy.stats import pointbiserialr
 from sklearn.base import MultiOutputMixin,ClassifierMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils import check_X_y
 from sklearn.utils.validation import check_is_fitted
-import logging
-import sys
-logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
@@ -34,9 +38,10 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
     -max_iter: (default = 4000)
     -tol: Absolute tolerance/accuracy in the solution (coefficients) that is passed to both Elastic Net and Adaptive Elastic Net solvers.(default = 1e-4)
     -solver_ENet: (default = 'saga')
-    -SIS_method: Method used to calculate ihow many features to keep after teh sure independence screening. As recommended in 
-        Fan and Lv 2008,  this can be'one-less' (n-1), 'log' (n/log(n)), a user-defined integer or None if no screening is desired. 
-        If the input dimensionality is too high and 'log' gives a number >number of intances SIS defaults to the number of instances.(default = 'log')
+    -SIS_method: Method used to calculate how many features to keep after the sure independence screening. 
+        We used a modified version from the original paper (Fan and Lv 2008) based on the point biserial correlation between features and binary outcome.
+        As recommended in the paper,the screening method can be'one-less' (n-1), 'log' (n/log(n)), a user-defined integer or None if no screening is desired. 
+        If the input dimensionality is too high and 'log' gives a number > number of intances SIS defaults to the number of instances. (Default = 'on-less')
     -AdaNet_solver: What cvxpy solver to use to minimize the AdaNet loss function. By default is the option 'default' that leaves cvxpy teh option to use the most
     appropriate. User can input any solver. If either 'default' or user-defined solver fails the model tries to use either 'ECOS' or 'SCS' to find a 
     suboptimal solution. If none of those works, it reports zero coefficients (trivial solution). (default = 'default')
@@ -80,7 +85,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         fit_intercept=True,
         max_iter=4000,
         copy_X=True,
-        SIS_method = 'one_less',
+        SIS_method = 'one-less',
         solver_ENet = 'saga',
         AdaNet_solver_verbose = False,
         AdaNet_solver = 'default',
@@ -197,7 +202,8 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         oracle properties are comprised.
 
         SIS ensures that the most irrelevant features (in terms of correlation with the outcome)
-        are disregarded while keeping all the relevant features with P -> 1.
+        are disregarded while keeping all the relevant features with P -> 1. We compute correlations
+        based on the point biserial correlation coefficients..
 
         Uses method specified in the model call to set how many features to keep. As recommended in 
         Fan and Lv 2008,  this can be'one-less' (n-1), 'log' (n/log(n)) or a user-defined integer.
@@ -223,19 +229,11 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         elif isinstance(self.SIS_method, str):
             raise ValueError('Wrong SIS method string. Available options are one-less, log or an integer.')
 
-         # # Standardize the data columnwise
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)  # Perform column-wise standardization
+        # Compute Pearson correlation coefficients
+        omega = np.array([pointbiserialr(x=y, y=X[:, i])[0] for i in range(X.shape[1])])
 
-        X1 = X_scaled[y==1] # Instances with class label '1'
-        X0 = X_scaled[y==0] # Instances with class label '0'
-
-        sum1 = np.sum(X1, axis = 0) # Featurewise sum of instances from class '1'
-        sum0 = np.sum(X0, axis = 0) # Featurewise sum of instances  from class '0'
-
-        omega = sum1 - sum0 #elementwise correlation scores of features with outcome
         # find the index of the top n_out features
-        abs_sorted_indices = np.argsort(-np.abs(omega))  # Sort in descending order
+        abs_sorted_indices = np.argsort(-abs(omega))  # Sort in descending order
         original_indices = np.arange(len(omega))
 
         return  original_indices[abs_sorted_indices][:self.n_out], omega
@@ -276,7 +274,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         zero_idx = np.where(enet_coef.ravel()==0)[-1]
         
         # Get the indexes of the NONzero coefficient features
-        nonzero_idx = np.array(list(set(np.arange(self.n_features))-set(zero_idx)))
+        nonzero_idx = np.array(list(set(np.arange(X.shape[1]))-set(zero_idx)))
 
         # Select the data on the naive ENet active set 
         X = X[:, nonzero_idx]
@@ -284,7 +282,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         # Shape relevant to the optimization problem
         n,m = X.shape
 
-        if len(zero_idx)<m:
+        if m>0:
             if self.fit_intercept:
                 init_pen = 1
                 m+=1
@@ -295,7 +293,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
                 enet_coef = EN_rescale_ctant*enet_coef
                 
             beta_variables = cvxpy.Variable(m)
-            X_exp = np.c_[np.ones((X.shape[0],1)), X]
+            X_exp = np.c_[np.ones((n,1)), X]
             model_prediction = X_exp@beta_variables
 
             # Loss

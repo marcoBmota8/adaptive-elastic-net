@@ -1,9 +1,9 @@
 # %%
 import numpy as np
-from aenet.aenV1 import AdaptiveElasticNet
+from aenet.aenV2 import AdaptiveElasticNet
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score,average_precision_score, roc_curve
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from CML_tool.oracle_model_eval import compute_metrics
 from CML_tool.Utils import read_pickle
 import pandas as pd
@@ -126,7 +126,7 @@ meta_df = read_pickle(path = '/home/barbem4/projects/Data/Initial Data', filenam
 AdaNet = AdaptiveElasticNet(
     AdaNet_solver_verbose=False,
     AdaNet_solver = 'default',
-    SIS_method = 10,
+    SIS_method = 'one-less',
     refinement=5,
     warm_start=True, 
     max_iter=4000,
@@ -137,10 +137,7 @@ AdaNet = AdaptiveElasticNet(
     nonzero_tol='default',
     tol = 1e-4)
 
-params_AdaNet = {'C': 0.92936400068973167,
- 'l1_ratio': 0.03894339606017799,
- 'nu': 0.010625391786908087,
- 'gamma': 1}
+params_AdaNet = {'C': 598.530099253463, 'l1_ratio': 0.4718544435940898, 'nu': 19.760031869591373, 'gamma': 1}
 
 AdaNet.set_params(**params_AdaNet)
 # %%
@@ -148,8 +145,14 @@ AdaNet.fit(data_SLE, labels)
 
 # %%
 # print('ENet: ', np.array(features_names)[np.where(AdaNet.enet_coef_.ravel() != 0)[-1]])
-
+aucs = cross_val_score(
+    estimator = AdaNet,
+    X = data_SLE.values,
+    y = labels.values,
+    scoring = 'roc_auc',
+    cv = 10
+)
+print('10-fold CV: ', np.mean(aucs))
 print('AdaNet: ', np.array(features_names)[np.where(AdaNet.coef_.ravel() != 0)[-1]])
-
 
 # %%
