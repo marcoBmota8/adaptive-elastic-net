@@ -15,10 +15,10 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message=\
                         "An input array is constant; the correlation coefficient is not defined.*")
 
 import pandas as pd
-from sklearn.exceptions import ConvergenceWarning
 import cvxpy
 import numpy as np
 from scipy.stats import pointbiserialr
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.base import MultiOutputMixin,ClassifierMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils import check_X_y
