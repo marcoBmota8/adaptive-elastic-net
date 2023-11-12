@@ -199,7 +199,7 @@ class AdaptiveElasticNet(LogisticRegression, MultiOutputMixin, ClassifierMixin):
         problem before fitting the AdaNet model (also before the initial naive ENet).
 
         This is specially critical in the p>>n case. Where the assymptotic 
-        oracle properties are comprised.
+        oracle properties are compromised.
 
         SIS ensures that the most irrelevant features (in terms of correlation with the outcome)
         are disregarded while keeping all the relevant features with P -> 1. We compute correlations
