@@ -2,6 +2,7 @@
 AdaNet_test_EHR.py
 .DS_Store
 ._.DS_Store
+.flake8
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
